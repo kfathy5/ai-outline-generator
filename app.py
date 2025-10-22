@@ -13,23 +13,24 @@ import time
 
 
 class HuggingFaceOutlineGenerator:
-    """Generate article outlines using FREE Hugging Face Inference API."""
+    """Generate article outlines using Hugging Face Inference Providers."""
     
     def __init__(self, api_token: Optional[str] = None):
         self.api_token = api_token or os.environ.get("HF_TOKEN")
-        self.model_name = "mistralai/Mistral-7B-Instruct-v0.2"
+        self.model_name = "meta-llama/Llama-3.2-3B-Instruct"
         self.client = None
         
     def initialize_client(self):
         """Initialize the Hugging Face client with error handling."""
         if not self.api_token:
             raise ValueError("Hugging Face token required. Get it from https://huggingface.co/settings/tokens")
-        
+    
         try:
-            self.client = InferenceClient(token=self.api_token)
+            self.client = InferenceClient(api_key=self.api_token)
         except Exception as e:
             st.error(f"Failed to initialize client: {str(e)}")
             raise
+
     
     def detect_article_type(self, topic: str) -> str:
         """Detect the type of article from the topic."""
@@ -103,26 +104,29 @@ Make the outline SEO-optimized, reader-friendly, and highly specific to the topi
 Respond with ONLY the JSON, no additional text. [/INST]"""
     
     def generate_outline(self, topic: str, keyword: str = "") -> Dict:
-        """Generate article outline using FREE Hugging Face API with retry logic."""
+        """Generate article outline using Hugging Face Inference Providers with retry logic."""
         if self.client is None:
             self.initialize_client()
-        
+    
         prompt = self.create_prompt(topic, keyword)
-        
+    
         max_retries = 2
         for attempt in range(max_retries):
             try:
-                response = self.client.text_generation(
-                    prompt,
+                # Use chat completion API instead of text_generation
+                completion = self.client.chat.completions.create(
                     model=self.model_name,
-                    max_new_tokens=1500,
-                    temperature=0.7,
-                    return_full_text=False
+                    messages=[
+                        {"role": "user", "content": prompt}
+                    ],
+                    max_tokens=1500,
+                    temperature=0.7
                 )
-                
+            
+                response = completion.choices[0].message.content
                 outline = self._parse_response(response, topic, keyword)
                 return outline
-                
+            
             except Exception as e:
                 error_msg = str(e).lower()
                 if "rate limit" in error_msg or "429" in error_msg:
@@ -135,12 +139,15 @@ Respond with ONLY the JSON, no additional text. [/INST]"""
                 elif "token" in error_msg or "401" in error_msg or "unauthorized" in error_msg:
                     st.error("🔑 Invalid or expired token. Please check your Hugging Face token.")
                     st.info("Get a new token at: https://huggingface.co/settings/tokens")
+                elif "404" in error_msg or "not found" in error_msg:
+                    st.error("❌ Model not available. Using template fallback.")
                 else:
                     st.warning(f"API error: {str(e)}")
-                
+            
                 return self._generate_template_based(topic, keyword)
-        
+    
         return self._generate_template_based(topic, keyword)
+
     
     def _parse_response(self, response: str, topic: str, keyword: str) -> Dict:
         """Parse API response and extract JSON outline."""
@@ -447,8 +454,8 @@ def main():
     
     st.markdown("<div class='main-header'>", unsafe_allow_html=True)
     st.title("📝 AI Article Outline Generator")
-    st.markdown("Generate structured, SEO-optimized article outlines using **FREE Hugging Face API**")
-    st.markdown("<span class='free-badge'>100% FREE ON HUGGING FACE SPACES</span>", unsafe_allow_html=True)
+    st.markdown("Generate structured, SEO-optimized article outlines using **Hugging Face Inference Providers**")
+    st.markdown("<span class='free-badge'>FREE CREDITS INCLUDED</span>", unsafe_allow_html=True)
     st.markdown("</div>", unsafe_allow_html=True)
     
     with st.sidebar:
@@ -497,7 +504,7 @@ def main():
         """)
         
         st.markdown("---")
-        st.markdown("**Model:** Mistral-7B-Instruct-v0.2")
+        st.markdown("**Model:** Llama-3.2-3B-Instruct")
         st.markdown("**Hosting:** Hugging Face Spaces")
     
     col1, col2 = st.columns([2, 1])
@@ -622,7 +629,7 @@ def main():
     st.markdown("---")
     st.markdown("""
         <div style='text-align: center; color: #666; font-size: 0.875rem;'>
-            <p>Powered by Mistral-7B-Instruct-v0.2 | Running on Hugging Face Spaces</p>
+            <p>Powered by Llama-3.2-3B-Instruct via Inference Providers | Running on Hugging Face Spaces</p>
             <p>100% Free & Open Source</p>
         </div>
     """, unsafe_allow_html=True)
