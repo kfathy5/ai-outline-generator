@@ -36,7 +36,7 @@ class HuggingFaceOutlineGenerator:
             raise ValueError("Hugging Face token required. Get it from https://huggingface.co/settings/tokens")
     
         try:
-            self.client = InferenceClient(api_key=self.api_token)
+            self.client = InferenceClient(token=self.api_token)
             # Try to find a working model
             self._find_working_model()
         except Exception as e:
