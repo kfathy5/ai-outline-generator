@@ -1,13 +1,13 @@
 """
 AI Article Outline Generator for Hugging Face Spaces
-Fixed version with Inference Providers API compatibility
+Enhanced version with multiple model fallback support
 """
 
 import streamlit as st
 import json
 import re
 import os
-from typing import Dict, Optional
+from typing import Dict, Optional, List, Tuple
 from huggingface_hub import InferenceClient
 import time
 
@@ -15,10 +15,20 @@ import time
 class HuggingFaceOutlineGenerator:
     """Generate article outlines using Hugging Face Inference Providers."""
     
+    # List of models to try in order (from best to fallback)
+    MODELS = [
+        "meta-llama/Llama-3.2-3B-Instruct",
+        "microsoft/Phi-3-mini-4k-instruct",
+        "mistralai/Mistral-7B-Instruct-v0.2",
+        "HuggingFaceH4/zephyr-7b-beta",
+        "google/gemma-2-2b-it"
+    ]
+    
     def __init__(self, api_token: Optional[str] = None):
         self.api_token = api_token or os.environ.get("HF_TOKEN")
-        self.model_name = "meta-llama/Llama-3.2-3B-Instruct"
+        self.model_name = None  # Will be set after testing
         self.client = None
+        self.working_model_found = False
         
     def initialize_client(self):
         """Initialize the Hugging Face client with error handling."""
@@ -27,9 +37,46 @@ class HuggingFaceOutlineGenerator:
     
         try:
             self.client = InferenceClient(api_key=self.api_token)
+            # Try to find a working model
+            self._find_working_model()
         except Exception as e:
             st.error(f"Failed to initialize client: {str(e)}")
             raise
+    
+    def _find_working_model(self):
+        """Test models to find one that works with Inference Providers."""
+        if self.working_model_found:
+            return
+        
+        for model in self.MODELS:
+            try:
+                # Quick test with minimal tokens
+                response = self.client.chat.completions.create(
+                    model=model,
+                    messages=[{"role": "user", "content": "Hi"}],
+                    max_tokens=5,
+                    timeout=10
+                )
+                
+                # If we get here, the model works!
+                self.model_name = model
+                self.working_model_found = True
+                st.success(f"✅ Using model: {model.split('/')[-1]}")
+                return
+                
+            except Exception as e:
+                error_msg = str(e).lower()
+                # Only continue if it's a model availability issue
+                if "404" in error_msg or "not found" in error_msg or "not available" in error_msg:
+                    continue
+                else:
+                    # Other errors (like auth) should be raised
+                    if "token" in error_msg or "401" in error_msg:
+                        raise
+        
+        # If no model worked
+        st.warning("⚠️ Could not connect to any Inference Provider model. Using template fallback.")
+        self.model_name = self.MODELS[0]  # Set a default for display purposes
 
     
     def detect_article_type(self, topic: str) -> str:
@@ -107,13 +154,18 @@ Respond with ONLY the JSON, no additional text."""
         """Generate article outline using Hugging Face Inference Providers with retry logic."""
         if self.client is None:
             self.initialize_client()
+        
+        # If no working model was found during initialization, use template
+        if not self.working_model_found:
+            st.info("📋 Using template-based generation (AI models unavailable)")
+            return self._generate_template_based(topic, keyword)
     
         prompt = self.create_prompt(topic, keyword)
     
         max_retries = 2
         for attempt in range(max_retries):
             try:
-                # Use NEW Inference Providers chat.completions API
+                # Use Inference Providers chat.completions API
                 completion = self.client.chat.completions.create(
                     model=self.model_name,
                     messages=[
@@ -126,7 +178,7 @@ Respond with ONLY the JSON, no additional text."""
                     temperature=0.7
                 )
                 
-                # Extract response from new API structure
+                # Extract response from API structure
                 response_text = completion.choices[0].message.content
                 outline = self._parse_response(response_text, topic, keyword)
                 return outline
@@ -144,9 +196,9 @@ Respond with ONLY the JSON, no additional text."""
                     st.error("🔑 Invalid or expired token. Please check your Hugging Face token.")
                     st.info("Get a new token at: https://huggingface.co/settings/tokens")
                 elif "404" in error_msg or "not found" in error_msg:
-                    st.error("❌ Model not available. Using template fallback.")
+                    st.error("❌ Model temporarily unavailable. Using template fallback.")
                 else:
-                    st.warning(f"API error: {str(e)}")
+                    st.warning(f"⚠️ API error: {str(e)[:100]}")
             
                 return self._generate_template_based(topic, keyword)
     
@@ -207,189 +259,191 @@ Respond with ONLY the JSON, no additional text."""
     
     def _generate_howto_outline(self, topic: str, keyword: str) -> Dict:
         """Generate how-to guide outline."""
-        h1 = f"{topic}" + (f" - {keyword}" if keyword else "")
+        clean_topic = topic.replace("how to", "").replace("How to", "").strip()
+        kw = f" ({keyword})" if keyword else ""
         
         return {
-            'h1': h1,
+            'h1': f"Complete Guide: How to {clean_topic.title()}{kw}",
             'sections': [
                 {
-                    'h2': 'What You Need to Know Before Starting',
+                    'h2': f"Understanding {clean_topic.title()}: What You Need to Know",
                     'bullets': [
-                        'Essential background information and prerequisites',
-                        'Tools and resources you will need',
-                        'Time commitment and difficulty level'
+                        f"Core concepts and fundamentals of {clean_topic}",
+                        f"Common misconceptions about {clean_topic}",
+                        f"Who can benefit from {clean_topic} and why"
                     ]
                 },
                 {
-                    'h2': 'Step-by-Step Process',
+                    'h2': f"Essential Preparation Before You Start",
                     'bullets': [
-                        'Detailed first step with clear instructions',
-                        'Second step building on the first',
-                        'Third step to complete the process'
+                        "Required tools, resources, and prerequisites",
+                        "Setting realistic goals and expectations",
+                        "Common mistakes to avoid from the beginning"
                     ]
                 },
                 {
-                    'h2': 'Common Mistakes to Avoid',
+                    'h2': f"Step-by-Step: How to {clean_topic.title()}",
                     'bullets': [
-                        'First common pitfall and how to prevent it',
-                        'Second mistake beginners often make',
-                        'Third issue and its solution'
+                        "Detailed walkthrough of each critical step",
+                        "Pro tips and best practices for better results",
+                        "Time-saving shortcuts and efficiency hacks"
                     ]
                 },
                 {
-                    'h2': 'Tips for Success and Next Steps',
+                    'h2': f"Troubleshooting and Advanced Tips",
                     'bullets': [
-                        'Pro tip to optimize your results',
-                        'How to troubleshoot common issues',
-                        'Advanced techniques and further learning'
+                        "Solutions to common problems and challenges",
+                        "Advanced techniques for experienced users",
+                        "Resources for continued learning and improvement"
                     ]
                 }
             ],
             'ctas': [
-                {'after': 0, 'text': 'Ready to get started? Download our comprehensive checklist'},
-                {'after': 2, 'text': 'Need help? Join our community for support'},
-                {'after': 3, 'text': 'Master this skill - enroll in our advanced course'}
+                {'after': 0, 'text': f"Ready to master {clean_topic}? Continue reading for our proven step-by-step process."},
+                {'after': 2, 'text': f"Download our free {clean_topic} checklist to track your progress."},
+                {'after': 3, 'text': f"Need expert help? Join our community of {clean_topic} enthusiasts."}
             ]
         }
     
     def _generate_listicle_outline(self, topic: str, keyword: str) -> Dict:
         """Generate listicle/comparison outline."""
-        h1 = f"{topic}" + (f" - {keyword}" if keyword else "")
+        kw = f" - {keyword}" if keyword else ""
         
         return {
-            'h1': h1,
+            'h1': f"{topic.title()}: Expert Analysis and Comparison{kw}",
             'sections': [
                 {
-                    'h2': 'Selection Criteria and Methodology',
+                    'h2': "Selection Criteria: What Makes a Great Choice",
                     'bullets': [
-                        'How we evaluated and ranked options',
-                        'Key factors we considered in our analysis',
-                        'Why these criteria matter for your decision'
+                        "Key factors to consider when evaluating options",
+                        "How we tested and ranked each option",
+                        "Understanding your specific needs and priorities"
                     ]
                 },
                 {
-                    'h2': 'Top Choices - Detailed Comparison',
+                    'h2': "Top Picks: Detailed Reviews and Analysis",
                     'bullets': [
-                        'First option: strengths, weaknesses, and best use cases',
-                        'Second option: unique features and value proposition',
-                        'Third option: why it stands out from competitors'
+                        "In-depth review of the best options available",
+                        "Pros and cons of each recommendation",
+                        "Real-world performance and user feedback"
                     ]
                 },
                 {
-                    'h2': 'Feature-by-Feature Analysis',
+                    'h2': "Head-to-Head Comparison",
                     'bullets': [
-                        'Performance comparison across key metrics',
-                        'Price and value assessment',
-                        'User experience and ease of use'
+                        "Side-by-side feature and pricing comparison",
+                        "Which option is best for different use cases",
+                        "Value for money analysis and recommendations"
                     ]
                 },
                 {
-                    'h2': 'Final Verdict and Recommendations',
+                    'h2': "Making Your Decision: Final Recommendations",
                     'bullets': [
-                        'Best overall choice and why',
-                        'Best option for specific needs or budgets',
-                        'What to consider before making your decision'
+                        "Our top recommendation for most users",
+                        "Budget-friendly alternatives worth considering",
+                        "Premium options for advanced users"
                     ]
                 }
             ],
             'ctas': [
-                {'after': 0, 'text': 'Get our detailed comparison chart'},
-                {'after': 2, 'text': 'See our top pick in action - watch the demo'},
-                {'after': 3, 'text': 'Make your choice with confidence - read user reviews'}
+                {'after': 0, 'text': "See our methodology and testing process to understand our rankings."},
+                {'after': 2, 'text': "Compare all options side-by-side with our interactive comparison tool."},
+                {'after': 3, 'text': "Get our exclusive discount codes for the top-rated options."}
             ]
         }
     
     def _generate_explanatory_outline(self, topic: str, keyword: str) -> Dict:
         """Generate explanatory article outline."""
-        h1 = f"Understanding {topic}" + (f" - {keyword}" if keyword else "")
+        clean_topic = topic.replace("what is", "").replace("What is", "").strip()
+        kw = f": {keyword}" if keyword else ""
         
         return {
-            'h1': h1,
+            'h1': f"Understanding {clean_topic.title()}{kw} - Complete Explanation",
             'sections': [
                 {
-                    'h2': 'What Is It? Core Definition',
+                    'h2': f"What is {clean_topic.title()}? Definition and Overview",
                     'bullets': [
-                        'Clear, simple explanation of the concept',
-                        'Historical context and origin',
-                        'Why it matters in today\'s context'
+                        f"Clear, simple definition of {clean_topic}",
+                        "Historical context and how it developed",
+                        "Why it matters in today's context"
                     ]
                 },
                 {
-                    'h2': 'How It Works - Key Mechanisms',
+                    'h2': f"How {clean_topic.title()} Works: Key Concepts",
                     'bullets': [
-                        'Fundamental principles explained simply',
-                        'Step-by-step breakdown of the process',
-                        'Real-world analogy to aid understanding'
+                        "Breaking down the fundamental principles",
+                        "Real-world examples to illustrate the concept",
+                        "Common terminology and what it means"
                     ]
                 },
                 {
-                    'h2': 'Practical Applications and Examples',
+                    'h2': f"Applications and Use Cases",
                     'bullets': [
-                        'Common use cases in everyday life',
-                        'Industry-specific applications',
-                        'Case study demonstrating the concept'
+                        f"Practical applications of {clean_topic}",
+                        "Industries and fields where it's most relevant",
+                        "Benefits and advantages of understanding this topic"
                     ]
                 },
                 {
-                    'h2': 'Common Questions and Misconceptions',
+                    'h2': f"Common Questions and Misconceptions",
                     'bullets': [
-                        'Most frequently asked questions answered',
-                        'Myths debunked with facts',
-                        'What beginners should know'
+                        "Frequently asked questions answered",
+                        "Debunking common myths and misconceptions",
+                        "Expert insights and future trends"
                     ]
                 }
             ],
             'ctas': [
-                {'after': 1, 'text': 'Want to dive deeper? Download our comprehensive guide'},
-                {'after': 2, 'text': 'See it in action - explore our interactive examples'},
-                {'after': 3, 'text': 'Still have questions? Connect with our expert community'}
+                {'after': 0, 'text': f"Want to dive deeper? Explore our advanced guide to {clean_topic}."},
+                {'after': 2, 'text': f"See how {clean_topic} applies to your situation with our interactive tool."},
+                {'after': 3, 'text': f"Stay updated with the latest developments in {clean_topic}."}
             ]
         }
     
     def _generate_general_outline(self, topic: str, keyword: str) -> Dict:
         """Generate general article outline."""
-        h1 = f"Complete Guide to {topic}" + (f" - {keyword}" if keyword else "")
+        kw = f" - {keyword}" if keyword else ""
         
         return {
-            'h1': h1,
+            'h1': f"{topic.title()}: Comprehensive Guide{kw}",
             'sections': [
                 {
-                    'h2': 'Introduction and Overview',
+                    'h2': "Introduction and Background",
                     'bullets': [
-                        'What this topic covers and why it matters',
-                        'Who should read this and what you\'ll learn',
-                        'Key takeaways and benefits'
+                        f"Overview of {topic} and its significance",
+                        "Current trends and latest developments",
+                        "Who should read this guide and why"
                     ]
                 },
                 {
-                    'h2': 'Core Concepts and Fundamentals',
+                    'h2': "Key Concepts and Fundamentals",
                     'bullets': [
-                        'Essential information you need to know',
-                        'Important terminology explained',
-                        'Foundation for understanding advanced topics'
+                        "Essential information you need to know",
+                        "Important terminology and definitions",
+                        "Core principles explained clearly"
                     ]
                 },
                 {
-                    'h2': 'Advanced Insights and Analysis',
+                    'h2': "Practical Applications and Examples",
                     'bullets': [
-                        'Deeper dive into complex aspects',
-                        'Expert perspectives and best practices',
-                        'Latest trends and developments'
+                        "Real-world use cases and scenarios",
+                        "Step-by-step guidance and best practices",
+                        "Tips for getting the best results"
                     ]
                 },
                 {
-                    'h2': 'Practical Tips and Next Steps',
+                    'h2': "Conclusion and Next Steps",
                     'bullets': [
-                        'How to apply this knowledge effectively',
-                        'Common challenges and solutions',
-                        'Resources for further learning'
+                        "Summary of key takeaways",
+                        "Action items and recommendations",
+                        "Additional resources for further learning"
                     ]
                 }
             ],
             'ctas': [
-                {'after': 1, 'text': 'Get started with our beginner-friendly guide'},
-                {'after': 2, 'text': 'Level up your knowledge with our expert resources'},
-                {'after': 3, 'text': 'Join our community to continue learning'}
+                {'after': 0, 'text': "Continue reading to discover everything you need to know."},
+                {'after': 2, 'text': "Download our free resource guide for easy reference."},
+                {'after': 3, 'text': "Join our newsletter for more expert insights and tips."}
             ]
         }
     
@@ -400,12 +454,12 @@ Respond with ONLY the JSON, no additional text."""
         for idx, section in enumerate(outline['sections']):
             text += f"## {section['h2']}\n\n"
             for bullet in section['bullets']:
-                text += f"- {bullet}\n"
+                text += f"• {bullet}\n"
             text += "\n"
             
             cta = next((c for c in outline['ctas'] if c['after'] == idx), None)
             if cta:
-                text += f"**Call to Action:** {cta['text']}\n\n"
+                text += f"[CTA: {cta['text']}]\n\n"
         
         return text
 
@@ -414,33 +468,36 @@ def main():
     st.set_page_config(
         page_title="AI Article Outline Generator",
         page_icon="📝",
-        layout="wide"
+        layout="wide",
+        initial_sidebar_state="expanded"
     )
     
     st.markdown("""
         <style>
         .main-header {
-            text-align: center;
-            padding: 2rem 0;
+            padding: 1rem 0;
+            border-bottom: 2px solid #f0f2f6;
+            margin-bottom: 2rem;
         }
         .outline-section {
-            background-color: #f0f2f6;
+            background-color: #f8f9fa;
             padding: 1.5rem;
-            border-radius: 10px;
+            border-radius: 8px;
             margin: 1rem 0;
+            border-left: 4px solid #4F46E5;
         }
         .cta-box {
-            background-color: #e3f2fd;
-            border-left: 4px solid #2196f3;
+            background-color: #FEF3C7;
             padding: 1rem;
+            border-radius: 8px;
             margin: 1rem 0;
-            border-radius: 5px;
+            border-left: 4px solid #F59E0B;
         }
         .free-badge {
-            background-color: #10b981;
+            background-color: #10B981;
             color: white;
-            padding: 0.5rem 1rem;
-            border-radius: 12px;
+            padding: 0.25rem 0.75rem;
+            border-radius: 8px;
             font-size: 0.875rem;
             font-weight: bold;
         }
@@ -494,6 +551,7 @@ def main():
         ✅ Explanatory Articles  
         ✅ SEO-Optimized  
         ✅ CTA Suggestions  
+        ✅ Auto Model Fallback  
         """)
         
         st.markdown("---")
@@ -507,7 +565,7 @@ def main():
         """)
         
         st.markdown("---")
-        st.markdown("**Model:** Llama-3.2-3B-Instruct")
+        st.markdown("**Models:** Multiple with auto-fallback")
         st.markdown("**API:** Inference Providers")
         st.markdown("**Hosting:** Hugging Face Spaces")
     
@@ -633,7 +691,7 @@ def main():
     st.markdown("---")
     st.markdown("""
         <div style='text-align: center; color: #666; font-size: 0.875rem;'>
-            <p>Powered by Llama-3.2-3B-Instruct via Inference Providers | Running on Hugging Face Spaces</p>
+            <p>Powered by Multiple LLMs via Inference Providers | Running on Hugging Face Spaces</p>
             <p>100% Free & Open Source</p>
         </div>
     """, unsafe_allow_html=True)
