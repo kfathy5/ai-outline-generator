@@ -26,7 +26,7 @@ class HuggingFaceOutlineGenerator:
             raise ValueError("Hugging Face token required. Get it from https://huggingface.co/settings/tokens")
     
         try:
-            self.client = InferenceClient(api_key=self.api_token)
+            self.client = InferenceClient(token=self.api_token)
         except Exception as e:
             st.error(f"Failed to initialize client: {str(e)}")
             raise
