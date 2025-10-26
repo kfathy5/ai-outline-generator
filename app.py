@@ -114,12 +114,18 @@ Respond with ONLY the JSON, no additional text. [/INST]"""
         for attempt in range(max_retries):
             try:
                 # Use text_generation API
-                response = self.client.text_generation(
-                    prompt=prompt,
-                    model=self.model_name,
-                    max_new_tokens=1500,
+                completion = client.chat.completions.create(
+                    model="meta-llama/Llama-3.2-3B-Instruct",
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": "your prompt here"
+                        }
+                    ],
+                    max_tokens=1500,
                     temperature=0.7
                 )
+                
                 outline = self._parse_response(response, topic, keyword)
                 return outline
             
