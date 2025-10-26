@@ -113,17 +113,13 @@ Respond with ONLY the JSON, no additional text. [/INST]"""
         max_retries = 2
         for attempt in range(max_retries):
             try:
-                # Use chat completion API instead of text_generation
-                completion = self.client.chat_completion(
+                # Use text_generation API
+                response = self.client.text_generation(
+                    prompt=prompt,
                     model=self.model_name,
-                    messages=[
-                        {"role": "user", "content": prompt}
-                    ],
-                    max_tokens=1500,
+                    max_new_tokens=1500,
                     temperature=0.7
-            )
-            
-                response = completion.choices[0].message.content
+                )
                 outline = self._parse_response(response, topic, keyword)
                 return outline
             
