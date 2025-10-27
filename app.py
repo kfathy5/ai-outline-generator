@@ -1,6 +1,6 @@
 """
 AI Article Outline Generator for Hugging Face Spaces
-Fixed version with reliable Serverless Inference API models
+Fixed version v2.1 - Timeout parameter issue resolved
 """
 
 import streamlit as st
@@ -17,16 +17,16 @@ class HuggingFaceOutlineGenerator:
     
     # Updated list of models that work with HF Serverless Inference API (free tier)
     MODELS = [
-        "meta-llama/Llama-3.2-3B-Instruct",           # Primary choice
-        "HuggingFaceH4/zephyr-7b-beta",               # Reliable fallback
-        "mistralai/Mistral-7B-Instruct-v0.1",         # Alternative
-        "tiiuae/falcon-7b-instruct",                   # Fallback option
-        "google/flan-t5-large"                         # Last resort
+        "meta-llama/Llama-3.2-3B-Instruct",
+        "HuggingFaceH4/zephyr-7b-beta",
+        "mistralai/Mistral-7B-Instruct-v0.1",
+        "tiiuae/falcon-7b-instruct",
+        "google/flan-t5-large"
     ]
     
     def __init__(self, api_token: Optional[str] = None):
         self.api_token = api_token or os.environ.get("HF_TOKEN")
-        self.model_name = None  # Will be set after testing
+        self.model_name = None
         self.client = None
         self.working_model_found = False
         
@@ -36,14 +36,11 @@ class HuggingFaceOutlineGenerator:
             raise ValueError("Hugging Face token required. Get it from https://huggingface.co/settings/tokens")
     
         try:
-            # Initialize client with token
             self.client = InferenceClient(token=self.api_token)
             
-            # Validate token first
             if not self._validate_token():
                 raise ValueError("Invalid or expired Hugging Face token. Please get a new one from https://huggingface.co/settings/tokens")
             
-            # Try to find a working model
             self._find_working_model()
             
         except Exception as e:
@@ -53,9 +50,7 @@ class HuggingFaceOutlineGenerator:
     def _validate_token(self) -> bool:
         """Validate the HF token before trying models."""
         try:
-            # Try a simple API call to validate the token
-            # Use whoami endpoint would be better, but we'll try a simple model test
-            return True  # If client initialization didn't fail, token format is OK
+            return True
         except Exception as e:
             return False
     
@@ -70,12 +65,11 @@ class HuggingFaceOutlineGenerator:
             try:
                 st.text(f"Testing {model.split('/')[-1]}...")
                 
-                # Quick test with minimal tokens - use text_generation for better compatibility
+                # Quick test with minimal tokens - NO timeout parameter
                 response = self.client.text_generation(
                     prompt="Hello",
                     model=model,
-                    max_new_tokens=5,
-                    timeout=15
+                    max_new_tokens=5
                 )
                 
                 # If we get here without exception, the model works!
@@ -100,7 +94,7 @@ class HuggingFaceOutlineGenerator:
         # If no model worked
         st.warning("⚠️ Could not connect to any Inference API model. Using template fallback.")
         st.info("This might be due to:\n- Token permissions\n- Model availability\n- Rate limits\n\nYou can still use template-based generation.")
-        self.model_name = self.MODELS[0]  # Set a default for display purposes
+        self.model_name = self.MODELS[0]
 
     
     def detect_article_type(self, topic: str) -> str:
@@ -189,7 +183,7 @@ Respond with ONLY the JSON, no additional text."""
         max_retries = 2
         for attempt in range(max_retries):
             try:
-                # Use text_generation API for better compatibility
+                # Use text_generation API - NO timeout parameter
                 response_text = self.client.text_generation(
                     prompt=prompt,
                     model=self.model_name,
@@ -279,7 +273,7 @@ Respond with ONLY the JSON, no additional text."""
             elif current_section and line and not line.startswith('{') and not line.startswith('}'):
                 # Add as bullet point
                 clean_line = line.strip('•-*: ')
-                if len(clean_line) > 10:  # Ignore very short lines
+                if len(clean_line) > 10:
                     current_section['bullets'].append(clean_line)
         
         if current_section and len(current_section['bullets']) > 0:
@@ -562,9 +556,8 @@ def main():
     with st.sidebar:
         st.header("⚙️ Settings")
         
-        # Check for token in environment first (from Hugging Face Spaces secrets)
+        # Check for token in environment first
         default_token = os.environ.get("HF_TOKEN", "")
-        token_source = "environment" if default_token else "manual"
         
         if default_token:
             st.success("✅ Token loaded from environment")
@@ -608,9 +601,8 @@ def main():
         """)
         
         st.markdown("---")
-        st.markdown("**Models:** Multiple with auto-fallback")
+        st.markdown("**Version:** 2.1 (Timeout Fix)")
         st.markdown("**API:** HF Serverless Inference")
-        st.markdown("**Hosting:** Hugging Face Spaces")
     
     col1, col2 = st.columns([2, 1])
     
@@ -735,8 +727,8 @@ def main():
     st.markdown("---")
     st.markdown("""
         <div style='text-align: center; color: #666; font-size: 0.875rem;'>
-            <p>Powered by Multiple LLMs via HF Serverless Inference API | Running on Hugging Face Spaces</p>
-            <p>100% Free & Open Source | Fixed Version 2.0</p>
+            <p>Powered by Multiple LLMs via HF Serverless Inference API</p>
+            <p>100% Free & Open Source | v2.1 - Timeout Issue Fixed</p>
         </div>
     """, unsafe_allow_html=True)
 
