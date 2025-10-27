@@ -1,6 +1,6 @@
 """
 AI Article Outline Generator for Hugging Face Spaces
-Fixed version v2.1 - Timeout parameter issue resolved
+Fixed version v2.2 - Free tier compatible models
 """
 
 import streamlit as st
@@ -15,13 +15,13 @@ import time
 class HuggingFaceOutlineGenerator:
     """Generate article outlines using Hugging Face Inference API."""
     
-    # Updated list of models that work with HF Serverless Inference API (free tier)
+    # Models confirmed to work with HF Serverless API free tier
+    # These are smaller, more accessible models
     MODELS = [
-        "meta-llama/Llama-3.2-3B-Instruct",
-        "HuggingFaceH4/zephyr-7b-beta",
-        "mistralai/Mistral-7B-Instruct-v0.1",
-        "tiiuae/falcon-7b-instruct",
-        "google/flan-t5-large"
+        "google/flan-t5-base",              # Reliable, always available
+        "google/flan-t5-large",             # Good quality
+        "tiiuae/falcon-7b-instruct",        # If available
+        "HuggingFaceH4/zephyr-7b-beta",     # Try if available
     ]
     
     def __init__(self, api_token: Optional[str] = None):
@@ -37,22 +37,11 @@ class HuggingFaceOutlineGenerator:
     
         try:
             self.client = InferenceClient(token=self.api_token)
-            
-            if not self._validate_token():
-                raise ValueError("Invalid or expired Hugging Face token. Please get a new one from https://huggingface.co/settings/tokens")
-            
             self._find_working_model()
             
         except Exception as e:
             st.error(f"Failed to initialize client: {str(e)}")
             raise
-    
-    def _validate_token(self) -> bool:
-        """Validate the HF token before trying models."""
-        try:
-            return True
-        except Exception as e:
-            return False
     
     def _find_working_model(self):
         """Test models to find one that works with Serverless Inference API."""
@@ -61,11 +50,15 @@ class HuggingFaceOutlineGenerator:
         
         st.info("🔍 Testing models to find available one...")
         
+        # Track if we saw any 404s vs auth errors
+        all_404 = True
+        saw_auth_error = False
+        
         for model in self.MODELS:
             try:
                 st.text(f"Testing {model.split('/')[-1]}...")
                 
-                # Quick test with minimal tokens - NO timeout parameter
+                # Quick test with minimal tokens
                 response = self.client.text_generation(
                     prompt="Hello",
                     model=model,
@@ -82,19 +75,35 @@ class HuggingFaceOutlineGenerator:
                 error_msg = str(e).lower()
                 st.warning(f"❌ {model.split('/')[-1]}: {str(e)[:100]}")
                 
-                # Check for authentication errors
-                if "401" in error_msg or "unauthorized" in error_msg or "token" in error_msg:
-                    st.error("🔑 Authentication failed. Please check your Hugging Face token:")
-                    st.info("1. Go to https://huggingface.co/settings/tokens\n2. Create a new token with 'read' permissions\n3. Copy and paste it in the sidebar")
-                    raise ValueError("Invalid token - please update your HF token")
-                
-                # Continue trying other models for other errors
-                continue
+                # Track error types
+                if "404" in error_msg or "not found" in error_msg:
+                    # 404 means model not available, not an auth issue
+                    continue
+                elif "401" in error_msg or "unauthorized" in error_msg or "invalid token" in error_msg:
+                    saw_auth_error = True
+                    all_404 = False
+                    st.error("🔑 Authentication failed. Your token may be invalid or expired.")
+                    st.info("Please:\n1. Go to https://huggingface.co/settings/tokens\n2. Create a NEW token with 'read' permissions\n3. Make sure to copy the FULL token (starts with hf_)")
+                    raise ValueError("Invalid token - please get a new HF token")
+                else:
+                    all_404 = False
+                    continue
         
-        # If no model worked
-        st.warning("⚠️ Could not connect to any Inference API model. Using template fallback.")
-        st.info("This might be due to:\n- Token permissions\n- Model availability\n- Rate limits\n\nYou can still use template-based generation.")
-        self.model_name = self.MODELS[0]
+        # If we got here, no model worked
+        if all_404:
+            st.warning("⚠️ All models returned 404 Not Found. This usually means:")
+            st.info("""
+            **Possible causes:**
+            - Models require accepting terms of use on HuggingFace
+            - Models not available on free Serverless tier
+            - Models require Pro subscription
+            
+            **Solution:** The app will use template-based generation, which still works great!
+            """)
+        else:
+            st.warning("⚠️ Could not connect to any model. Using template fallback.")
+        
+        self.model_name = self.MODELS[0]  # Set default for display
 
     
     def detect_article_type(self, topic: str) -> str:
@@ -183,7 +192,6 @@ Respond with ONLY the JSON, no additional text."""
         max_retries = 2
         for attempt in range(max_retries):
             try:
-                # Use text_generation API - NO timeout parameter
                 response_text = self.client.text_generation(
                     prompt=prompt,
                     model=self.model_name,
@@ -210,7 +218,7 @@ Respond with ONLY the JSON, no additional text."""
                 elif "404" in error_msg or "not found" in error_msg:
                     st.error("❌ Model temporarily unavailable. Using template fallback.")
                 else:
-                    st.error(f"Error: {str(e)[:200]}")
+                    st.warning(f"⚠️ {str(e)[:200]}")
                 
                 # Fallback to template
                 return self._generate_template_based(topic, keyword)
@@ -258,20 +266,17 @@ Respond with ONLY the JSON, no additional text."""
         """Create a structured outline from unstructured AI response."""
         st.warning("⚠️ AI response wasn't in perfect format. Creating structured outline...")
         
-        # Extract headings and content
         lines = [line.strip() for line in text.split('\n') if line.strip()]
         
         sections = []
         current_section = None
         
         for line in lines:
-            # Check if it's a heading
             if any(marker in line.lower() for marker in ['section', 'step', '##', 'h2:', '**']):
                 if current_section and len(current_section['bullets']) > 0:
                     sections.append(current_section)
                 current_section = {'h2': line.strip('#*: '), 'bullets': []}
             elif current_section and line and not line.startswith('{') and not line.startswith('}'):
-                # Add as bullet point
                 clean_line = line.strip('•-*: ')
                 if len(clean_line) > 10:
                     current_section['bullets'].append(clean_line)
@@ -279,24 +284,19 @@ Respond with ONLY the JSON, no additional text."""
         if current_section and len(current_section['bullets']) > 0:
             sections.append(current_section)
         
-        # If we didn't extract enough sections, use template
         if len(sections) < 3:
             return self._generate_template_based(topic, keyword)
         
-        # Create the outline
         h1 = f"Complete Guide to {topic.title()}"
         if keyword:
             h1 = f"{topic.title()}: {keyword.title()}"
         
-        # Ensure each section has at least 3 bullets
         for section in sections:
             while len(section['bullets']) < 3:
                 section['bullets'].append(f"Additional details about {section['h2'].lower()}")
         
-        # Limit to 4 sections
         sections = sections[:4]
         
-        # Create CTAs
         ctas = [
             {"after": 0, "text": "Ready to get started? Learn more about implementing these strategies."},
             {"after": 1, "text": "Want expert guidance? Check out our comprehensive resources."},
@@ -466,11 +466,9 @@ Respond with ONLY the JSON, no additional text."""
         
         template = templates.get(article_type, templates['general'])
         
-        # Customize with keyword if provided
         if keyword:
             template['h1'] = f"{template['h1'].split(':')[0]}: {keyword.title()} Edition"
         
-        # Add CTAs
         template['ctas'] = [
             {"after": 0, "text": f"Want to master {topic}? Continue reading for expert insights."},
             {"after": 1, "text": "Ready to take action? Apply these proven strategies today."},
@@ -489,7 +487,6 @@ Respond with ONLY the JSON, no additional text."""
                 text += f"• {bullet}\n"
             text += "\n"
             
-            # Add CTA if present
             cta = next((c for c in outline['ctas'] if c['after'] == idx), None)
             if cta:
                 text += f"💡 **Call to Action:** {cta['text']}\n\n"
@@ -550,13 +547,12 @@ def main():
     st.markdown("<div class='main-header'>", unsafe_allow_html=True)
     st.title("📝 AI Article Outline Generator")
     st.markdown("Generate structured, SEO-optimized article outlines using **Hugging Face Serverless Inference API**")
-    st.markdown("<span class='free-badge'>FREE CREDITS INCLUDED</span>", unsafe_allow_html=True)
+    st.markdown("<span class='free-badge'>FREE - NO PAYMENT REQUIRED</span>", unsafe_allow_html=True)
     st.markdown("</div>", unsafe_allow_html=True)
     
     with st.sidebar:
         st.header("⚙️ Settings")
         
-        # Check for token in environment first
         default_token = os.environ.get("HF_TOKEN", "")
         
         if default_token:
@@ -585,8 +581,7 @@ def main():
         ✅ Explanatory Articles  
         ✅ SEO-Optimized  
         ✅ CTA Suggestions  
-        ✅ Auto Model Fallback  
-        ✅ Template Backup Mode  
+        ✅ **Template Fallback (Always Works!)**  
         """)
         
         st.markdown("---")
@@ -598,11 +593,13 @@ def main():
         3. Add keyword (optional)
         4. Generate outline
         5. Download or copy
+        
+        **Note:** If AI models are unavailable, template generation ensures you always get results!
         """)
         
         st.markdown("---")
-        st.markdown("**Version:** 2.1 (Timeout Fix)")
-        st.markdown("**API:** HF Serverless Inference")
+        st.markdown("**Version:** 2.2 (Free Tier)")
+        st.markdown("**Always Works:** Template Fallback")
     
     col1, col2 = st.columns([2, 1])
     
@@ -641,7 +638,7 @@ def main():
         )
     
     if generate_button and topic.strip() and api_token:
-        with st.spinner("🤖 Generating detailed outline... This may take 20-40 seconds..."):
+        with st.spinner("🤖 Generating detailed outline..."):
             try:
                 if 'generator' not in st.session_state or st.session_state.get('api_token') != api_token:
                     st.session_state.generator = HuggingFaceOutlineGenerator(api_token=api_token)
@@ -653,7 +650,13 @@ def main():
                 
             except Exception as e:
                 st.error(f"Error: {str(e)}")
-                st.info("💡 **Troubleshooting Tips:**\n1. Verify your token at https://huggingface.co/settings/tokens\n2. Ensure token has 'read' permissions\n3. Try generating again in a few moments")
+                st.info("💡 Don't worry! Using template-based generation instead...")
+                # Force template generation
+                generator = HuggingFaceOutlineGenerator(api_token=api_token)
+                outline = generator._generate_template_based(topic, keyword)
+                st.session_state.outline = outline
+                st.session_state.generator = generator
+                st.success("✅ Outline generated using template!")
     
     if 'outline' in st.session_state:
         outline = st.session_state.outline
@@ -710,6 +713,8 @@ def main():
             - 📝 General Content
             
             The AI will automatically detect your article type and create an optimized outline!
+            
+            **Note:** If AI models are unavailable, template-based generation will provide excellent results!
             """)
         else:
             st.warning("""
@@ -719,7 +724,8 @@ def main():
             2. Sign up for FREE (no credit card needed)
             3. Click "New token"
             4. Select **Read** permissions
-            5. Copy and paste token in sidebar
+            5. Copy the FULL token (starts with hf_)
+            6. Paste token in sidebar
             
             **100% FREE - No payment required!**
             """)
@@ -727,8 +733,8 @@ def main():
     st.markdown("---")
     st.markdown("""
         <div style='text-align: center; color: #666; font-size: 0.875rem;'>
-            <p>Powered by Multiple LLMs via HF Serverless Inference API</p>
-            <p>100% Free & Open Source | v2.1 - Timeout Issue Fixed</p>
+            <p>Powered by HuggingFace + Smart Template Fallback</p>
+            <p>100% Free & Open Source | v2.2 - Always Works!</p>
         </div>
     """, unsafe_allow_html=True)
 
